@@ -1,0 +1,7 @@
+/Users/mac/Desktop/workspace/mini-transformer/build/CMakeFiles/mini_transformer.dir
+/Users/mac/Desktop/workspace/mini-transformer/build/CMakeFiles/edit_cache.dir
+/Users/mac/Desktop/workspace/mini-transformer/build/CMakeFiles/rebuild_cache.dir
+/Users/mac/Desktop/workspace/mini-transformer/build/CMakeFiles/list_install_components.dir
+/Users/mac/Desktop/workspace/mini-transformer/build/CMakeFiles/install.dir
+/Users/mac/Desktop/workspace/mini-transformer/build/CMakeFiles/install/local.dir
+/Users/mac/Desktop/workspace/mini-transformer/build/CMakeFiles/install/strip.dir

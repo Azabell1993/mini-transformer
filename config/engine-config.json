@@ -1,0 +1,22 @@
+{
+  "common": {
+    "api_port": 18080,
+    "license": "./license.json",
+    "public_key_path": "./public.pem"
+  },
+  "tokenizer": {
+    "type": "bpe",
+    "vocab_path": "./tokenizer/vocab.json",
+    "merges_path": "./tokenizer/merges.txt"
+  },
+  "model": {
+    "vocab_size": 4,
+    "n_layers": 1,
+    "n_heads": 2,
+    "d_model": 4,
+    "d_ff": 4,
+    "max_seq_len": 4,
+    "weights_type": "json",
+    "weights_path": "../models/minigpt-char.json"
+  }
+}

@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Mini-Transformer Demo</title>
+  <link rel="stylesheet" href="style.css" />
+  <script src="main.js" defer></script>
+</head>
+
+<body>
+  <!-- NAV -->
+  <header class="navbar">
+    <div class="container">
+      <h1>Mini-Transformer Web Demo</h1>
+      <p class="muted">입력 토큰 → 다음 토큰 예측 / 시퀀스 생성</p>
+      <div class="status-indicator">
+        <span id="serverStatus" class="status-dot offline"></span>
+        <span id="statusText">서버 상태 확인 중…</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="container">
+
+        <!-- MODEL SUMMARY -->
+        <section aria-labelledby="model-summary">
+        <h3 id="model-summary">기본 모델 설정 요약</h3>
+        <div class="config-grid">
+            <div class="config-item"><label>vocab_size</label><span id="vocabSize">—</span></div>
+            <div class="config-item"><label>d_model</label><span id="dModel">—</span></div>
+            <div class="config-item"><label>n_layers</label><span id="nLayers">—</span></div>
+            <div class="config-item"><label>n_heads</label><span id="nHeads">—</span></div>
+            <div class="config-item"><label>d_ff</label><span id="dFf">—</span></div>
+            <div class="config-item"><label>max_seq_len</label><span id="maxSeq">—</span></div>
+            <div class="config-item"><label>최대 토큰 ID</label><span id="maxTokenId">—</span></div>
+        </div>
+        </section>
+        <!-- ARCH DIAGRAM -->
+        <section aria-labelledby="arch">
+        
+
+    <!-- ARCH DIAGRAM -->
+    <section aria-labelledby="arch">
+    <h3 id="arch">아키텍처</h3>
+
+    <!-- 1) 상단: End-to-End 흐름 (리본형) -->
+    <div class="embedding-section" style="max-width: 980px">
+            <div class="box embedding-box">
+            <div class="box-title">입력</div>
+            <div class="box-subtitle">토큰 ID 시퀀스</div>
+            <div class="box-content">e.g. <code>101, 42, 17, 9</code></div>
+            </div>
+            <div class="arrow">➡</div>
+
+            <div class="box embedding-box">
+            <div class="box-title">임베딩 + 위치</div>
+            <div class="box-subtitle">seq_len × d_model</div>
+            <div class="box-content">토큰임베딩 + 위치인코딩(사인/코사인 or 학습형)</div>
+            </div>
+            <div class="arrow">➡</div>
+
+            <div class="box transformer-box">
+            <div class="box-title">트랜스포머 블록</div>
+            <div class="box-subtitle">Pre-LN × <code>n_layers</code></div>
+            <div class="box-content">
+                    <div class="layer">LN → MHA → Residual</div>
+                    <div class="layer">LN → FFN → Residual</div>
+            </div>
+            </div>
+            <div class="arrow">➡</div>
+
+            <div class="box logits-box">
+            <div class="box-title">Projection</div>
+            <div class="box-subtitle">d_model → vocab</div>
+            <div class="box-content">logits → Softmax</div>
+            </div>
+            <div class="arrow">➡</div>
+
+            <div class="box output-box">
+            <div class="box-title">다음 토큰</div>
+            <div class="box-subtitle">argmax / sampling</div>
+            </div>
+    </div>
+
+    <!-- 2) 하단: 블록 내부 상세 (논문/구현 정렬) -->
+    <div class="box" style="margin-top:16px; padding:16px;">
+            <div class="box-title" style="margin-bottom:8px;">Transformer Block (Pre-LN, 구현 동일)</div>
+
+            <!-- 약간의 인라인 레이아웃 유틸 -->
+            <style>
+            .arch-grid{display:grid;grid-template-columns:repeat(12,1fr);gap:10px;align-items:stretch}
+            .arch-col{border:1px solid var(--gray-300);border-radius:12px;padding:12px;background:#fff}
+            .arch-col h5{margin:0 0 6px 0;font-size:14px}
+            .chip{display:inline-block;border:1px dashed var(--gray-300);border-radius:8px;padding:4px 8px;margin:2px 0;font-size:12px}
+            .thin{font-size:12px;color:var(--gray-600)}
+            .eq{background:#f8fafc;border-radius:8px;padding:6px 8px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12px; text-align:center;}
+            .arrow-v{font-size:18px;line-height:1;text-align:center;color:var(--gray-600)}
+            /* 표 참고 컬럼 깨짐 방지 */
+            .ref-table td, .ref-table th { vertical-align: top; }
+            </style>
+
+            <div class="arch-grid">
+
+            <!-- Pre-LN -->
+            <div class="arch-col" style="grid-column:span 2;">
+                    <h5>LayerNorm</h5>
+                    <div class="thin">입력: <code>(seq_len × d_model)</code></div>
+                    <div class="eq">y = LN(x)</div>
+                    <div class="arrow-v">⬇</div>
+                    <div class="thin">Pre-LN: LN을 먼저 적용</div>
+            </div>
+
+            <!-- MHA -->
+            <div class="arch-col" style="grid-column:span 5;">
+                    <h5>Multi-Head Self-Attention</h5>
+                    <div class="chip">Q = X W<sub>Q</sub>, K = X W<sub>K</sub>, V = X W<sub>V</sub></div>
+                    <div class="thin">W*: <code>(d_model × d_model)</code>, head_dim = <code>d_model / n_heads</code></div>
+                    <div class="chip">Split → <code>(seq_len × n_heads × head_dim)</code></div>
+                    <div class="eq">Attention(Q,K,V) = softmax( QK<sup>T</sup> / √d<sub>k</sub> <span class="thin">(+ mask?)</span> ) V</div>
+                    <div class="chip">Concat heads → <code>(seq_len × d_model)</code></div>
+                    <div class="chip">Output proj: W<sub>O</sub> ∈ <code>(d_model × d_model)</code></div>
+                    <div class="thin">※ 데모: causal mask/KV cache 생략 가능(확장 지점)</div>
+            </div>
+
+            <!-- Residual 1 -->
+            <div class="arch-col" style="grid-column:span 2;">
+                    <h5>Residual Add</h5>
+                    <div class="eq">x<sub>1</sub> = x + MHA(LN(x))</div>
+                    <div class="thin">skip connection</div>
+            </div>
+
+            <!-- LN → FFN -->
+            <div class="arch-col" style="grid-column:span 3;">
+                    <h5>LayerNorm → FFN</h5>
+                    <div class="chip">z = LN(x<sub>1</sub>)</div>
+                    <div class="chip">FFN: Linear(d<sub>model</sub>→d<sub>ff</sub>) → ReLU → Linear(d<sub>ff</sub>→d<sub>model</sub>)</div>
+                    <div class="eq">x<sub>2</sub> = x<sub>1</sub> + FFN(z)</div>
+                    <div class="thin">활성함수: 데모는 <code>ReLU</code> (교체 가능)</div>
+            </div>
+
+            <!-- 반복 안내 -->
+            <div class="arch-col" style="grid-column:span 12;background:#f8fafc;">
+                    <div class="thin"><strong>반복</strong>: 위 블록을 <code>n_layers</code> 번 스택</div>
+            </div>
+
+            <!-- Final Norm & Output -->
+            <div class="arch-col" style="grid-column:span 3;">
+                    <h5>Final LayerNorm</h5>
+                    <div class="eq">h = LN(x<sub>L</sub>)</div>
+                    <div class="thin">L = 마지막 블록</div>
+            </div>
+            <div class="arch-col" style="grid-column:span 5;">
+                    <h5>Output Projection</h5>
+                    <div class="chip">W<sub>out</sub> ∈ <code>(d_model × vocab_size)</code></div>
+                    <div class="eq">logits = h · W<sub>out</sub></div>
+            </div>
+            <div class="arch-col" style="grid-column:span 4;">
+                    <h5>Softmax & Next Token</h5>
+                    <div class="eq">p = softmax(logits)</div>
+                    <div class="thin">argmax / temperature, top-k 등 샘플링</div>
+            </div>
+
+            </div>
+    </div>
+            <!-- 세부: 실제 코드 구조와 수식/커널 연결 -->
+            <details class="help-details" style="margin-top:12px;">
+                    <summary><strong>도식 읽는 법 / 실제 코드 주석</strong></summary>
+                    <div class="help-content" style="text-align:left">
+
+                            <!-- MathJax 로딩: 수식 깨짐 방지 -->
+                            <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" defer></script>
+
+                            <h4>전파 순서 (Pre-LN Causal LM: 코드 기반)</h4>
+                            <ol>
+                                    <li><b>임베딩 + 위치</b>:
+                                            <div>토큰 ID는 <code>Transformer::token_embed</code> 행렬에서 임베딩 벡터를 조회하고,
+                                                    <code>pos_embed</code> (사인/코사인 대신 learnable)과 더해
+                                                    <div style="text-align:center;">\(\mathbf{X}\in\mathbb{R}^{L\times d_{model}}\)</div>
+                                            </div>
+                                    </li>
+
+                                    <li><b>블록 (× n_layers)</b> — <b>Pre-LN</b>:
+                                            <ul>
+                                                    <li><b>LayerNorm → MHA → Residual</b>:  
+                                                            <div style="text-align:center;">
+                                                            \(Q = XW_Q,\;\;K=XW_K,\;\;V=XW_V,\quad
+                                                            \text{Attn}(Q,K,V)=\mathrm{softmax}\!\left(\frac{QK^\top}{\sqrt{d_k}}\right)V\)
+                                                            </div>
+                                                            각 head는 <code>Attention::forward</code>에서 계산 → concat 후 \(W_O\) 투영.
+                                                    </li>
+                                                    <li><b>LayerNorm → FFN → Residual</b>:  
+                                                            FFN은 <code>ffn.cpp</code>에서 구현:
+                                                            <div style="text-align:center;">
+                                                            \(\text{FFN}(x) = ( \max(0,\,xW_1 + b_1) )W_2 + b_2\)
+                                                            </div>
+                                                            (코드상 GeLU 근사 대신 ReLU 기반도 확인됨).
+                                                    </li>
+                                            </ul>
+                                    </li>
+
+                                    <li><b>최종 LayerNorm + Projection</b>:  
+                                            <code>transformer.cpp</code> 마지막 단계에서  
+                                            <div style="text-align:center;">\(\hat{X}=\text{LN}(X)\)</div>, logits = <div style="text-align:center;">\(\hat{X}W_{out}\)</div>.  
+                                            CPU 단일스레드 matmul 커널(<code>tensor.hpp::matmul</code>) 사용.
+                                    </li>
+
+                                    <li><b>Softmax → argmax/샘플링</b>:  
+                                            <code>Transformer::next_token_argmax()</code>에서 구현.  
+                                            Softmax는 <code>tensor.hpp::softmax_rows()</code>로 안정화 (row-wise max subtraction).
+                                    </li>
+                            </ol>
+
+                            <h4>코드 제약 & 수학적 근거</h4>
+                            <ul>
+                                    <li><b>Pre-LN</b>: 블록 내부에서 항상 LN → SubLayer → Residual. (<code>layernorm.cpp</code>)</li>
+                                    <li><b>헤드 차원</b>: <code>d_model % n_heads == 0</code>, head_dim = <code>d_model/n_heads</code>.</li>
+                                    <li><b>FFN</b>: 구현은
+                                            <code>W1(d_model×d_ff) → GeLU/ReLU → W2(d_ff×d_model)</code>.  
+                                            GeLU 근사식:  
+                                            <div style="text-align:center;">
+                    <li><b>마스킹</b>: <code>attention.cpp</code>에서 <code>if (causal)</code> 분기 시  
+                        score 행렬에 −1e9 가산 → softmax 후 상삼각 mask 구현 가능.</li>
+                </ul>
+
+                <hr style="margin:12px 0"/>
+
+                <h4>실제 코드 스니펫 (핵심 구현)</h4>
+
+                <p><b>FFN::forward (ffn.cpp)</b></p>
+                <pre><code>Tensor h(x.rows(), d_ff);
+matmul(x, W1, h);
+gelu(h);                       // GeLU 근사 (tensor.hpp)
+Tensor y(x.rows(), x.cols());
+matmul(h, W2, y);
+add(y, x, out);                // Residual Add
+            </code></pre>
+
+                <p><b>LayerNorm::forward (layernorm.cpp)</b></p>
+                <pre><code>for row in x:
+mean = average(row)
+var  = variance(row)
+y = gamma * (row - mean) / sqrt(var + eps) + beta
+            </code></pre>
+
+                <p><b>Attention::forward (attention.cpp)</b></p>
+                <pre><code>// 1. Q,K,V 계산
+matmul(x, Wq, Q);
+matmul(x, Wk, K);
+matmul(x, Wv, V);
+
+// 2. Score = Q K^T / sqrt(d_k)
+// [옵션] causal mask 적용
+softmax_rows(score);
+
+// 3. Context = score V
+// 4. Head concat 후 Wo 투영
+            </code></pre>
+
+                <p><b>Softmax/Matmul 커널 (tensor.hpp)</b></p>
+                <pre><code>void softmax_rows(Tensor&amp; m) {
+    for row in m:
+            float max = row.max();
+            row = exp(row - max);
+            row /= sum(row);
+}
+            </code></pre>
+
+                <p><b>Transformer::next_token_argmax (transformer.cpp)</b></p>
+                <pre><code>// 1) 임베딩 + pos_embed
+// 2) 블록 반복: LN → MHA → Residual → LN → FFN → Residual
+// 3) final LN, Projection
+// 4) softmax + argmax
+            </code></pre>
+
+        <hr style="margin:12px 0"/>
+
+            <!-- 표 요약 -->
+            <h4>수식 & 레퍼런스 요약 표</h4>
+            <div style="overflow:auto">
+            <table style="width:100%; border-collapse:collapse; font-size:0.95rem">
+                <thead>
+                <tr>
+                    <th style="text-align:left; border-bottom:1px solid #ddd; padding:.4rem">블록</th>
+                    <th style="text-align:left; border-bottom:1px solid #ddd; padding:.4rem">수식</th>
+                    <th style="text-align:left; border-bottom:1px solid #ddd; padding:.4rem">참고</th>
+                </tr>
+                </thead>
+                <tbody>
+                <tr>
+                    <td style="padding:.4rem">Scaled Dot-Product Attention</td>
+                    <td style="padding:.4rem; white-space:nowrap">
+                    \(\mathrm{softmax}\!\left(\frac{QK^\top}{\sqrt{d_k}}\right)V\)
+                    </td>
+                    <td style="padding:.4rem">[1, Eq.(1)]</td>
+                </tr>
+                <tr>
+                    <td style="padding:.4rem">MHA 투영</td>
+                    <td style="padding:.4rem">
+                    \(Q\!=\!XW_Q,\;K\!=\!XW_K,\;V\!=\!XW_V\); concat→\(W_O\)
+                    </td>
+                    <td style="padding:.4rem">[1, §3.2.1]</td>
+                </tr>
+                <tr>
+                    <td style="padding:.4rem">FFN (코드: GeLU 근사)</td>
+                    <td style="padding:.4rem">
+                    \(\mathrm{FFN}(x)=\sigma(xW_1\!+\!b_1)W_2\!+\!b_2\);
+                    \(\mathrm{GeLU}(x)\!\approx\!0.5x(1+\tanh(\sqrt{2/\pi}(x+0.044715x^3)))\)
+                    </td>
+                    <td style="padding:.4rem">[1, §3.3], [2]</td>
+                </tr>
+                <tr>
+                    <td style="padding:.4rem">LayerNorm</td>
+                    <td style="padding:.4rem">
+                    \(y=\gamma\frac{x-\mu}{\sqrt{\sigma^2+\epsilon}}+\beta\)
+                    </td>
+                    <td style="padding:.4rem">[3]</td>
+                </tr>
+                <tr>
+                    <td style="padding:.4rem">Pre-LN 잔차 배치</td>
+                    <td style="padding:.4rem">
+                    \(x+\mathrm{Sublayer}(\mathrm{LN}(x))\)
+                    </td>
+                    <td style="padding:.4rem">[4]</td>
+                </tr>
+                </tbody>
+            </table>
+            </div>
+
+            <h4 style="margin-top:14px">참고문헌</h4>
+            <ol style="margin-left:1rem">
+            <li id="ref1">
+                Vaswani, A. et al. <i>Attention Is All You Need</i>, NeurIPS 2017.
+                <a href="https://arxiv.org/abs/1706.03762" target="_blank" rel="noopener">arXiv:1706.03762</a>
+            </li>
+            <li id="ref2">
+                Hendrycks, D., &amp; Gimpel, K. <i>Gaussian Error Linear Units (GELUs)</i>, 2016.
+                <a href="https://arxiv.org/abs/1606.08415" target="_blank" rel="noopener">arXiv:1606.08415</a>
+            </li>
+            <li id="ref3">
+                Ba, J. L., Kiros, J. R., &amp; Hinton, G. <i>Layer Normalization</i>, 2016.
+                <a href="https://arxiv.org/abs/1607.06450" target="_blank" rel="noopener">arXiv:1607.06450</a>
+            </li>
+            <li id="ref4">
+                Xiong, R. et al. <i>On Layer Normalization in the Transformer Architecture</i>, ICML 2020.
+                <a href="https://arxiv.org/abs/2002.04745" target="_blank" rel="noopener">arXiv:2002.04745</a>
+            </li>
+            </ol>
+
+            <p class="muted" style="margin-top:.5rem">
+            ※ 표의 [n] 표기는 위 참고문헌 번호입니다. 각 링크는 원문 PDF/abstract로 연결됩니다.
+            </p>
+                </div>
+            </details>
+
+        <!-- CONFIG EDIT -->
+        <section aria-labelledby="config-edit">
+          <h3 id="config-edit">설정 조정 (옵션)</h3>
+
+          <div class="config-edit-section">
+            <div class="config-controls">
+              <div class="config-row">
+                <label for="vocabSizeInput">vocab_size</label>
+                <input id="vocabSizeInput" type="number" min="100" max="10000" value="3200" oninput="updateConfig()" />
+              </div>
+              <div class="config-row">
+                <label for="dModelInput">d_model</label>
+                <input id="dModelInput" type="number" min="16" step="8" value="128" oninput="updateConfig()" />
+              </div>
+              <div class="config-row">
+                <label for="nLayersInput">n_layers</label>
+                <input id="nLayersInput" type="number" min="1" value="1" oninput="updateConfig()" />
+              </div>
+              <div class="config-row">
+                <label for="nHeadsInput">n_heads</label>
+                <input id="nHeadsInput" type="number" min="1" value="2" oninput="updateConfig()" />
+              </div>
+              <div class="config-row">
+                <label for="dFfInput">d_ff</label>
+                <input id="dFfInput" type="number" min="64" step="64" value="512" oninput="updateConfig()" />
+              </div>
+              <div class="config-row">
+                <label for="maxSeqInput">max_seq_len</label>
+                <input id="maxSeqInput" type="number" min="8" step="8" value="64" oninput="updateConfig()" />
+              </div>
+            </div>
+
+            <div class="config-actions">
+              <button class="btn-primary" onclick="applyConfig()">적용</button>
+              <button class="btn-outline" onclick="resetConfig()">기본값</button>
+            </div>
+            <br/>
+            <!-- === 실전 테스트 가이드 === -->
+            <div class="config-guide">
+            <h4 style="text-align:left;">테스트 가이드 (권장 프리셋 & 튜닝 요령)</h4>
+
+            <div class="config-grid" style="grid-template-columns: 1fr 2fr; text-align:left;">
+                <div class="config-item" style="text-align:left;">
+                <label style="text-align:left;">권장 시작값</label>
+                <div>
+                    <code>vocab_size=3200</code><br/>
+                    <code>d_model=128</code>, <code>n_heads=2</code><br/>
+                    <code>n_layers=1</code>, <code>d_ff=512</code><br/>
+                    <code>max_seq_len=64</code>
+                </div>
+                </div>
+                <div class="config-item" style="text-align:left;">
+                <label style="text-align:left;">튜닝 요령</label>
+                <ul style="margin:0; text-align:left;">
+                    <li><b>d_model</b>은 <b>n_heads</b>로 나누어떨어져야 합니다. 예: 128/2, 256/4</li>
+                    <li><b>파라미터 수</b>는 대략
+                    <code>임베딩(토큰+포지션) + 레이어×(MHA+FFN+LN) + 출력</code>으로 증가합니다.
+                    값이 커질수록 메모리/추론시간↑</li>
+                    <li><b>vocab_size</b>를 키우면 출력 Projection 크기와 Softmax가 크게 증가합니다.</li>
+                    <li><b>n_layers</b>를 키우면 깊이 증가(표현력↑), 하지만 추론시간도 비례 증가.</li>
+                    <li><b>n_heads</b>는 <code>d_model / n_heads</code>가 너무 작지 않게(보통 ≥ 32) 구성.</li>
+                    <li><b>d_ff</b>는 보통 <code>4×d_model</code> 근처로 시작(예: d_model=128 → d_ff=512).</li>
+                    <li><b>max_seq_len</b>이 클수록 메모리/시간↑. 데모는 64~128 권장.</li>
+                </ul>
+                </div>
+            </div>
+
+            <details style="margin-top:1rem;">
+                <summary><b>실습 팁 / 오류 방지 체크리스트</b></summary>
+                <ul style="text-align:left;">
+                <li>프론트에서 <b>적용</b> 버튼을 누른 뒤, <b>예측하기</b>로 동작 확인</li>
+                <li>서버 로그에 <code>set_config 요청</code>, <code>새 모델 구성 적용 완료</code>가 보여야 정상 적용</li>
+                <li><code>d_model % n_heads == 0</code> 조건을 반드시 만족</li>
+                <li>메모리 부족/과한 지연이 느껴지면:
+                    <ul>
+                    <li>우선 <b>n_layers</b>를 1로 낮추고</li>
+                    <li><b>d_model</b>을 128 또는 64로 낮춘 뒤</li>
+                    <li><b>max_seq_len</b>도 64 이하로 테스트</li>
+                    </ul>
+                </li>
+                <li>학습된 가중치가 없으면 결과는 랜덤에 가깝습니다(데모 목적).</li>
+                </ul>
+            </details>
+            
+            <div class="config-grid" style="grid-template-columns: repeat(3, 1fr); margin-top:1rem;">
+                <div class="config-item" style="text-align:left;">
+                <label style="text-align:left;">가벼운 데모</label>
+                <div><code>vocab=1000</code>, <code>d_model=64</code>, <code>n_heads=2</code>, <code>n_layers=1</code>, <code>d_ff=256</code>, <code>max_seq_len=64</code></div>
+                </div>
+                <div class="config-item" style="text-align:left;">
+                <label style="text-align:left;">표준 데모</label>
+                <div><code>vocab=3200</code>, <code>d_model=128</code>, <code>n_heads=2</code>, <code>n_layers=1</code>, <code>d_ff=512</code>, <code>max_seq_len=64</code></div>
+                </div>
+                <div class="config-item" style="text-align:left;">
+                <label style="text-align:left;">조금 무거움</label>
+                <div><code>vocab=4096</code>, <code>d_model=256</code>, <code>n_heads=4</code>, <code>n_layers=2</code>, <code>d_ff=1024</code>, <code>max_seq_len=128</code></div>
+                </div>
+            </div>
+
+            <p class="muted" style="margin-top:.75rem; text-align:left;">
+                * 성능/지연시간은 CPU 사양과 컴파일 옵션에 크게 좌우됩니다. 멀티스레드/SIMD 최적화가 없는 데모 구성에서는 위 <b>표준 데모</b>를 권장합니다.
+            </p>
+            </div>
+          </div>
+    </section>
+
+
+    <!-- DEMO -->
+    <section aria-labelledby="demo">
+      <h3 id="demo">데모 실행</h3>
+
+      <div class="demo-controls">
+        <div class="input-group">
+          <label for="tokenInput">토큰 ID (쉼표 구분)</label>
+          <input id="tokenInput" type="text" placeholder="예: 101, 42, 17" autocomplete="off" />
+          <div class="input-help">0 ≤ token &lt; <span id="maxTokenRange">vocab_size</span> (엔터로도 실행)</div>
+        </div>
+
+        <div class="button-group">
+          <button id="predictBtn" class="btn-primary" onclick="submitPrediction()">🎯 예측하기</button>
+          <button class="btn-outline" onclick="clearResults()">♻ 초기화</button>
+        </div>
+
+        <div class="example-tokens">
+          <button class="token-example" onclick="setTokens('101,42,17')">예시1</button>
+          <button class="token-example" onclick="setTokens('12,8,9,3,2')">예시2</button>
+          <button class="token-example" onclick="setTokens('7,7,7,13')">예시3</button>
+        </div>
+
+        <div id="result" class="result-container">
+          <div class="welcome-message">
+            <h4>트랜스포머 모델 테스트</h4>
+            <p>예시 버튼을 참조하여 값을 수동 및 자동으로 입력이 가능합니다.</p>
+            <p>토큰을 입력하고 버튼을 눌러 결과를 확인하세요.</p>
+            <p>이 데모는 교육용이며 초기 가중치는 임의값일 수 있습니다.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+</main>
+
+  <!-- Back to Top -->
+  <button id="backToTop" title="맨 위로">↑</button>
+
+  <!-- Loading -->
+  <div id="loadingOverlay" class="loading-overlay" role="alert" aria-live="polite">
+    <div class="loading-spinner">
+      <div class="spinner"></div>
+      <div>처리 중…</div>
+    </div>
+  </div>
+</body>
+</html>
