@@ -1,2 +1,4 @@
 # 3rdparty/nanogpt
 ./python_model_engine/3rdparty/
+.vscode/
+build/
