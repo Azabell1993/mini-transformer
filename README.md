@@ -632,8 +632,8 @@ $ JOBS=4 PORT=18080 ./run_demo.sh "$(pwd)"
 
 ### HTML 페이지를 유지해서 보기
 - 서버 유지 실행으로 백엔드를 켭니다.
-```
-mkdir build 후에는 아래 순서로 진행하세요:
+>$ mkdir build 후에는 아래 순서로 진행하세요.
+
 
 ```bash
 # 1. CMake 구성(Release 모드)
@@ -652,22 +652,17 @@ cmake --build build -j
 $ ./build/mini_transformer --serve --config "$(pwd)/config/engine-config.json"
 또는
 $ ./run_demo.sh
-```
-- 브라우저에서 http://localhost:18080/ 접속
--  종료는 `Ctrl+C`를 통해 가능
 
 ### 예시 분석 모델 파일(models)
 - 예시 JSON 가중치를 `models/minigpt-char.json`로 제공했습니다(소형 데모 스키마).
-- 사용법 :
-```
-# 1) 설정 수정
-$ jq '.model.weights_type="json" | .model.weights_path="./models/minigpt-char.json"' config/engine-config.json > config/engine-config.json.tmp && mv config/engine-config.json.tmp config/engine-config.json
+
 
 # 2) 빌드/실행 (서버 유지)
+```
 $ cmake --build build -j && ./build/mini_transformer --serve --config "$(pwd)/config/engine-config.json"
-
+```
 # 3) 브라우저 접속
-http://localhost:18080/
+> http://localhost:18080/
 
 # 4) 빠른 확인
 ```
@@ -870,15 +865,15 @@ $$
 
   #### 선형층의 분산 공식
 
-  선형층:  
+  선형층:    
   $$
-  y = xW + b,\quad W_{ij} \sim \mathcal{N}(0, \sigma^2)
-  $$
+  y = xW + b,\quad W_{ij} \sim \mathcal{N}(0, \sigma^2) 
+  $$. 
 
   출력 뉴런 $y_j$의 분산:  
-  $$
-  \mathrm{Var}[y_j] \approx d_{\text{in}} \cdot \mathrm{Var}[x] \cdot \sigma^2
-  $$
+  $$.  
+  \mathrm{Var}[y_j] \approx d_{\text{in}} \cdot \mathrm{Var}[x] \cdot \sigma^2 
+  $$ 
 
   즉, 입력 차원 $d_{\text{in}}$ (예: $d_{\text{model}}$, $d_{\text{ff}}$ 등)이 커질수록 출력 분산이 커져 **logit의 스케일이 커집니다**.
-# mini-transformer
+
