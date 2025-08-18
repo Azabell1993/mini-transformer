@@ -10,6 +10,7 @@ namespace mt {
 // - 모든 헤드 출력을 concat하여 W_o로 투영합니다.
 struct MultiHeadSelfAttention {
     int d_model{}, n_heads{}, d_head{};
+    bool use_causal_mask = false;  // [TODO] 마스크 사용 플래그 (기본 false)
     Tensor2D Wq, Wk, Wv, Wo; // (d_model x d_model)
 
     MultiHeadSelfAttention() = default;
@@ -49,6 +50,25 @@ struct MultiHeadSelfAttention {
             Tensor2D scores; matmul(Qh, KhT, scores);
             float scale = 1.0f/std::sqrt((float)d_head);
             for (auto& v: scores.data) v *= scale;
+
+            /**
+             * Causal Masking
+             * 
+             * - 목적: 미래 토큰(j > t)을 보지 못하도록 상삼각 영역에 큰 음수(-1e9f) 더하기
+             * - 형태: for t in [0..T): for j in [t+1..T): scores(t,j) += NEG_INF;
+             * - 주의: softmax_rows(scores) "바로 이전"에 수행되어야 함
+             * - 성능: O(T^2). T가 작을 때는 OK, 크면 블록/벡터화 고려
+             */
+            if (use_causal_mask) {
+                const float NEG_INF = -1e9f; // 또는 -std::numeric_limits<float>::infinity()
+                for (int t=0; t<T; ++t) {
+                    for (int j=t+1; j<T; ++j) {
+                        scores(t, j) += NEG_INF;
+                    }
+                }
+            }
+
+            // 행렬 softmax (tensor.hpp에서 수치 안전성 지원 - row-max 감산 후 exp)
             softmax_rows(scores);
 
             // 어텐션 출력 = softmax(scores) * Vh

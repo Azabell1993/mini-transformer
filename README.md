@@ -265,7 +265,7 @@ cmake --build build -j
   main.cpp내 코드에서 `간단한 미니 모델(독립 실행)`의 
   ```
     // 2) 간단한 미니 모델 데모(독립 실행) — 구조 확인용
-    //    입력 토큰 CSV가 있으면 안전 파싱하여 사용, 없으면 기본 {1,2,3,4}
+    // 입력 토큰 CSV가 있으면 안전 파싱하여 사용, 없으면 기본 {1,2,3,4}
     const int demo_vocab = 3200;          // 데모용 vocab 상한
     const int demo_dmodel = 128;
     const int demo_nlayers = 1;
@@ -522,51 +522,123 @@ $ JOBS=4 PORT=18080 ./run_demo.sh "$(pwd)"
 ---
 
 ## 10. 엔진 아키텍처(상세)
-```
-데이터 경로(요청하신 다이어그램 포함)
+```text
+데이터 경로 (mini-transformer: Decoder-only, Pre-LN)
 
 [입력 텍스트]
-     │
-     ▼
-[토크나이저: 문자열 → 토큰 ID]
-     │
-     ▼
-[토큰 임베딩 + 위치 인코딩]  →  (seq_len × d_model)
-     │
-     ▼
-┌───[트랜스포머 블록 #1]─────────────────────────────────────────┐
-│  [LayerNorm]                                                    │
-│       │                                                         │
-│       ▼                                                         │
-│  [Multi-Head Self-Attention]  ←─── Q,K,V 생성                   │
-│       │           │                                              │
-│       └─── Residual Add ◄────┘                                  │
-│            │                                                     │
-│            ▼                                                     │
-│        [LayerNorm]                                               │
-│            │                                                     │
-│            ▼                                                     │
-│         [Feed Forward Network (FFN)]                             │
-│            │                                                     │
-│       ┌────┴────────────────────────────────────────────────────┘
-│       ▼
-│  Residual Add
-└─────────────────────────────────────────────────────────────────┘
-     │
-  (반복: n_layers)
-     │
-     ▼
-[LayerNorm]
-     │
-     ▼
-[출력 Projection: d_model → vocab_size]
-     │
-     ▼
-[Softmax → 다음 토큰 확률 분포]
-     │
-     ▼
-[토큰 샘플링/선택 → 반복]
+     |
+     v
+[토크나이저: 문자열 -> 토큰 ID]        (api_server.cpp / tokenizer)
+     |
+     v
+[토큰 임베딩 + 위치 임베딩]            (transformer.cpp: tok_emb + pos_emb)
+ (shape: seq_len x d_model)
+     |
+     v
++---------------- Transformer Block #1 ----------------+  (n_layers 반복)
+|  [LayerNorm (Pre-LN)]                               |   (layernorm.cpp)
+|        |                                            |
+|        v                                            |
+|  [Multi-Head Self-Attention]                        |   (attention.cpp)
+|    - Q,K,V = X*Wq, X*Wk, X*Wv                       |  // 입력 X에서 쿼리/키/밸류 벡터 생성 (선형 변환)
+|    - Score = (Q K^T) / sqrt(d_k)                    |  // 유사도 점수 행렬 계산 (내적 기반, 차원수로 정규화)
+|    - Causal mask                                    |  // 미래 토큰을 보지 못하도록 상삼각 부분 -∞ 처리
+|    - softmax_rows(score)                            |  // 각 행(현재 토큰 기준) 확률 분포로 정규화
+|    - Context = score * V -> concat -> Wo            |  // 가중합으로 문맥 벡터 생성 → 헤드 합치고 최종 선형 변환
+|        |                                            |
+|        +------ Residual Add ------------------------+   (transformer.cpp)
+|                                                     |
+|        [LayerNorm (Pre-LN)]                         |   (layernorm.cpp)
+|                |                                    |
+|                v                                    |
+|        [Feed Forward Network (FFN)]                 |   (ffn.cpp)
+|        - y = GeLU(x W1) W2                          |   (tensor.hpp: gelu)
+|                |                                    |
+|                +------ Residual Add ----------------+   (transformer.cpp)
+|                                                     |
++-----------------------------------------------------+
+     |
+     v
+[최종 LayerNorm]                                   (layernorm.cpp)
+     |
+     v
+[Projection: d_model -> vocab_size (Wout)]          (transformer.cpp)
+     |
+     v
+[로짓(logits)에서 마지막 토큰 T만 사용]           (z_T = u_T Wout)
+     |
+     v
+[argmax 선택(기본) / softmax 확률화는 옵션]        (next_token_argmax)
+     |
+     v
+[토큰 샘플링/선택 -> 반복(오토리그레시브)]
+
 ```
+> `Pre-LN` : 각 서브레이어 앞에 LN, 뒤에 Residual(Add).  
+`마스킹/KV 캐시` : 현재 미구현(옵션으로 확장 가능).   
+`선택 로직` : 기본 argmax; 확률 필요 시 softmax_rows 활용.    
+`형상` : 임베딩/프로젝션 등은 README의 JSON 스키마와 config/engine-config.json의 V/D/L/F/T에 맞춤.  
+
+## 🧩 Causal Mask란?
+
+언어 모델(GPT 계열)은 **오토리그레시브(Autoregressive)** 방식으로 학습합니다.  
+즉, 현재 토큰을 예측할 때 **과거와 자기 자신만 참조**해야 하고, 미래 토큰은 보면 안 됩니다.  
+
+이를 위해 어텐션 스코어 계산 시 **Causal Mask**를 적용합니다.  
+
+---
+
+### 📌 수식 정의
+
+#### 일반 어텐션 (마스크 없음)
+
+$$
+\text{Score}_{i,j} = \frac{Q_i K_j^\top}{\sqrt{d_k}}
+$$
+
+#### Causal Mask 적용
+
+$$
+\text{Score}_{i,j} =
+\begin{cases}
+\dfrac{Q_i K_j^\top}{\sqrt{d_k}}, & j \leq i \\\\
+-\infty, & j > i
+\end{cases}
+$$
+
+- \( j \leq i \): 현재 위치 \(i\)의 토큰은 과거(또는 자기 자신)까지는 볼 수 있음  
+- \( j > i \): 미래 토큰은 \(-\infty\) 처리하여 softmax에서 확률 0이 되도록 함  
+
+---
+
+### 📌 직관적 이해
+
+- 마스크 없을 때: 모든 토큰이 서로를 참조 → 미래 정보까지 유출됨(치팅 발생)  
+- 마스크 적용 시: 현재 위치는 **자신과 과거만 참조** → 올바른 언어 모델 학습 보장  
+
+#### 예시 (시퀀스 길이 T=4)
+
+$$
+\text{Mask} =
+\begin{bmatrix}
+0 & -\infty & -\infty & -\infty \\\\
+0 & 0 & -\infty & -\infty \\\\
+0 & 0 & 0 & -\infty \\\\
+0 & 0 & 0 & 0
+\end{bmatrix}
+$$
+
+---
+
+### 📌 정리
+
+- **왜 필요한가?**  
+  미래 토큰을 미리 보는 "치팅"을 막기 위해.  
+- **어떻게 구현되나?**  
+  Softmax 직전에 스코어 행렬의 상삼각 부분을 \(-\infty\)로 채움.  
+- **결과**  
+  GPT 모델은 `P(x_t | x_1, ..., x_{t-1})` 분포만을 올바르게 학습/추론하게 됨.  
+
 
 ## 구현 세부
 - 수학 커널: `include/model/tensor.hpp`에 2D 텐서, 순차 matmul, 행별 softmax 구현(CPU 단일 스레드, 캐시 친화 최적화는 최소화).
@@ -794,21 +866,21 @@ $ ./build/mini_transformer --config "$(pwd)/config/engine-config.json" --tokens 
 
 | 개념         | 수식/설명                                   | 코드 위치(예)                       |
 |--------------|---------------------------------------------|-------------------------------------|
-| 임베딩 합    | hₜ⁽⁰⁾ = Eₓₜ + Pₜ                           | transformer.cpp (토큰/포지션 테이블 조회+합) |
-| Pre-LN       | 𝑡𝑖𝑙𝑑𝑒{h} = LN(h)                            | layernorm.cpp                       |
-| 어텐션 점수  | S = (QKᵗ) / sqrt(dₖ) + M                    | attention.cpp (matmul→스케일→[옵션]마스크) |
+| 임베딩 합    | $h_t^{(0)} = E_{x_t} + P_t$                 | transformer.cpp (토큰/포지션 테이블 조회+합) |
+| Pre-LN       | $\tilde{h} = \mathrm{LN}(h)$                | layernorm.cpp                       |
+| 어텐션 점수  | $S = \frac{QK^\top}{\sqrt{d_k}} + M$        | attention.cpp (matmul→스케일→[옵션]마스크) |
 | softmax      | 행별 softmax                                | tensor.hpp::softmax_rows()          |
-| 컨텍스트     | αV (헤드별→concat)                          | attention.cpp                       |
-| FFN          | GeLU(xW₁)W₂                                 | ffn.cpp (gelu() 근사 호출)          |
-| 최종 투영    | z_T = u_T W_out                             | transformer.cpp (마지막 토큰만 사용) |
-| 토큰 선택    | argmax_v z_T[v]                             | Transformer::next_token_argmax()    |
+| 컨텍스트     | $\alpha V$ (헤드별→concat)                  | attention.cpp                       |
+| FFN          | $\mathrm{GeLU}(xW_1)W_2$                    | ffn.cpp (gelu() 근사 호출)          |
+| 최종 투영    | $z_T = u_T W_{\text{out}}$                  | transformer.cpp (마지막 토큰만 사용) |
+| 토큰 선택    | $\arg\max_v z_T[v]$                         | Transformer::next_token_argmax()    |
 
 ### 오토리그레시브 마스킹(옵션)
 
-- 어텐션 수식의 \( M \)은 causal mask를 의미합니다.  
-- attention.cpp에서 마스크를 켜면, 상삼각 영역에 큰 음수(예: −1e9)를 더해 미래 토큰의 softmax가 0이 되도록 처리합니다.
+- 어텐션 수식의 $M$은 causal mask를 의미합니다.  
+- attention.cpp에서 마스크를 켜면, 상삼각 영역에 큰 음수(예: $-1e9$)를 더해 미래 토큰의 softmax가 0이 되도록 처리합니다.
 
-기호: V(어휘), D(히든), H(헤드), F(FFN 차원), L(블록), 입력 시퀀스 x₁..x_T.
+기호: $V$(어휘), $D$(히든), $H$(헤드), $F$(FFN 차원), $L$(블록), 입력 시퀀스 $x_1..x_T$.
 
 1) 입력 임베딩
 
@@ -816,7 +888,7 @@ $$
  h^{(0)}_t = E_{x_t} + P_t\quad (t=1,\dots,T)
 $$
 
-2) 각 블록 l=1..L (Pre-LN → MHA → Residual → Pre-LN → FFN → Residual)
+2) 각 블록 $l=1..L$ (Pre-LN → MHA → Residual → Pre-LN → FFN → Residual)
 
 $$
 \begin{aligned}
@@ -845,35 +917,3 @@ $$
  p(v\mid x_{1:T}) = \mathrm{softmax}(z_T)_v = \frac{e^{z_T[v]}}{\sum_{v'=0}^{V-1} e^{z_T[v']}},\quad
  \mathrm{next\_token\_argmax}(x_{1:T}) = \arg\max_v z_T[v].
 $$
-
-
----
-
-## 모델 구성 & 추론 파이프라인 (무학습 데모)
-엔진은 `/set_config`로 들어온 파라미터를 바탕으로 **Transformer를 새로 생성**하여 원자적으로 교체합니다.
-
-### 설정 변경에 따른 Top-k "logit" 변화
-
-  | 실험         | 설정                                                         | Top-5 (토큰ID, logit)                                                      | argmax |
-  |-------------|--------------------------------------------------------------|----------------------------------------------------------------------------|--------|
-  | A (가벼운 데모) | vocab=1000, d_model=64, n_layers=2, n_heads=1, d_ff=256, max_seq_len=64  | (140, 0.4939), (607, 0.4885), (462, 0.4816), (161, 0.4734), (640, 0.4572)  | 140    |
-  | B (표준 데모)   | vocab=3200, d_model=128, n_layers=1, n_heads=2, d_ff=512, max_seq_len=64 | (1701, 0.8100), (2327, 0.8001), (2955, 0.7444), (1488, 0.7323), (1780, 0.7202) | 1701   |
-  ### 핵심: 모델 파라미터가 logit 스케일에 미치는 영향
-
-  현재 모델은 **학습된 가중치 없이** 정규분포(σ=0.02)로 초기화합니다.  
-  `d_model`, `n_layers`, `d_ff`, `vocab_size`는 선형층의 입력/출력 차원을 바꿔 분산(Var)과 스케일을 달리 만듭니다.
-
-  #### 선형층의 분산 공식
-
-  선형층:    
-  $$
-  y = xW + b,\quad W_{ij} \sim \mathcal{N}(0, \sigma^2) 
-  $$. 
-
-  출력 뉴런 $y_j$의 분산:  
-  $$.  
-  \mathrm{Var}[y_j] \approx d_{\text{in}} \cdot \mathrm{Var}[x] \cdot \sigma^2 
-  $$ 
-
-  즉, 입력 차원 $d_{\text{in}}$ (예: $d_{\text{model}}$, $d_{\text{ff}}$ 등)이 커질수록 출력 분산이 커져 **logit의 스케일이 커집니다**.
-
