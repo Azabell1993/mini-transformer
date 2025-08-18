@@ -1,7 +1,12 @@
-# mini-transformer : 초경량 GPT/Transformer C++ 구현 및 구조 해설
+# mini-transformer
+> 초경량 GPT/Transformer C++ 구현 및 구조 해설
 
 - 본 문서는 Decoder-only(GPT 계열) 기반의 미니멀 Transformer를 C++로 구현한 예제와 아키텍처 설명을 제공합니다.
 - C++17 참조 구현을 포함합니다.
+
+<img width="1324" height="1686" alt="스크린샷 2025-08-18 오전 9 48 03" src="https://github.com/user-attachments/assets/c4e6065b-b945-47e5-b73c-e986bb252249" />  
+<img width="1074" height="2398" alt="스크린샷 2025-08-18 오전 9 47 55" src="https://github.com/user-attachments/assets/36516c59-6e73-4161-b832-7ad73c31aa57" />  
+
 
 1. [mini-transformer: 초경량 GPT/Transformer C++ 구현 및 구조 해설](#mini-transformer-초경량-gpttransformer-c-구현-및-구조-해설)
 2. [Intro](#1-intro)
@@ -917,3 +922,6 @@ $$
  p(v\mid x_{1:T}) = \mathrm{softmax}(z_T)_v = \frac{e^{z_T[v]}}{\sum_{v'=0}^{V-1} e^{z_T[v']}},\quad
  \mathrm{next\_token\_argmax}(x_{1:T}) = \arg\max_v z_T[v].
 $$
+
+-- 깃 클론을 받고 보시면 수식이 깨지지 않습니다.
+<img width="854" height="641" alt="스크린샷 2025-08-18 오후 12 37 34" src="https://github.com/user-attachments/assets/c364c877-7977-42a2-9ed7-2f897d71be4e" />  
