@@ -584,7 +584,7 @@ $ JOBS=4 PORT=18080 ./run_demo.sh "$(pwd)"
 `선택 로직` : 기본 argmax; 확률 필요 시 softmax_rows 활용.    
 `형상` : 임베딩/프로젝션 등은 README의 JSON 스키마와 config/engine-config.json의 V/D/L/F/T에 맞춤.  
 
-## 🧩 Causal Mask란?
+##  Causal Mask란?
 
 언어 모델(GPT 계열)은 **오토리그레시브(Autoregressive)** 방식으로 학습합니다.  
 즉, 현재 토큰을 예측할 때 **과거와 자기 자신만 참조**해야 하고, 미래 토큰은 보면 안 됩니다.  
